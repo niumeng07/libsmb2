@@ -1294,6 +1294,22 @@ connect_async_ai(struct smb2_context *smb2, const struct addrinfo *ai, int *fd_o
                 return -EIO;
         }
 
+        /* A suspended Apple client can resume with a dead TCP connection.
+         * Report EPIPE to the caller instead of terminating the process. */
+#ifdef SO_NOSIGPIPE
+        {
+                int enabled = 1;
+                if (setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE,
+                               &enabled, sizeof(enabled)) != 0) {
+                        int saved_errno = errno;
+                        smb2_set_error(smb2, "Failed to suppress SIGPIPE: %s",
+                                       strerror(saved_errno));
+                        close(fd);
+                        return -saved_errno;
+                }
+        }
+#endif
+
 #ifdef _XBOX
         if(setsockopt(fd, SOL_SOCKET, 0x5801, (PCSTR)&bBroadcast, sizeof(BOOL) ) != 0 )
         {
