@@ -518,7 +518,7 @@ smb2_process_create_request_variable(struct smb2_context *smb2,
                 (SMB2_CREATE_REQUEST_SIZE & 0xfffe);
         uint32_t offset;
         void *ptr;
-        int name_byte_len;
+        size_t name_byte_len;
 
         req->name = NULL;
         if (req->name_length > 0) {
