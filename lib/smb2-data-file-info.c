@@ -187,7 +187,7 @@ smb2_decode_file_stream_info(struct smb2_context *smb2,
         size_t offset = 0;
         uint32_t our_offset = 0;
         uint32_t next_offset;
-        int name_len;
+        size_t name_len;
         const char *name;
 
         do {
@@ -210,7 +210,7 @@ smb2_decode_file_stream_info(struct smb2_context *smb2,
                         /* The name follows the fixed part of the entry. */
                         avail = vec->len - offset - 24;
                         name_len = (fs->stream_name_length > avail) ?
-                                (int)avail : (int)fs->stream_name_length;
+                                avail : fs->stream_name_length;
                         if (name_len > 0) {
                                 name = smb2_utf16_to_utf8(
                                         (uint16_t *)(void *)&vec->buf[offset + 24],
@@ -218,8 +218,13 @@ smb2_decode_file_stream_info(struct smb2_context *smb2,
                                 if (!name) {
                                         return -1;
                                 }
-                                fs->stream_name_length = strlen(name);
-                                fs->stream_name = smb2_alloc_data(smb2, memctx, fs->stream_name_length + 1);
+                                name_len = strlen(name);
+                                if (name_len > UINT32_MAX || name_len == SIZE_MAX) {
+                                        free(discard_const(name));
+                                        return -1;
+                                }
+                                fs->stream_name_length = (uint32_t)name_len;
+                                fs->stream_name = smb2_alloc_data(smb2, memctx, name_len + 1);
                                 if (fs->stream_name == NULL) {
                                         free(discard_const(name));
                                         return -1;
@@ -559,7 +564,7 @@ smb2_decode_file_normalized_name_info(struct smb2_context *smb2,
                           struct smb2_iovec *vec)
 {
         struct smb2_iovec v _U_;
-        uint32_t name_len;
+        size_t name_len;
         const char *name;
 
         if (vec->len < 4) {
@@ -573,15 +578,13 @@ smb2_decode_file_normalized_name_info(struct smb2_context *smb2,
 
         if (fs->file_name_length > 0) {
                 name_len = fs->file_name_length;
-                /* Compare against what is left of the buffer rather than
-                 * adding to name_len: the addition is done in uint32 and a
-                 * FileNameLength of 0xfffffffc..0xffffffff wraps it to
-                 * 0..3, so the clamp below would never fire and we would
-                 * read ~2GB past the end of vec. vec->len >= 4 above.
+                /* Clamp by subtraction so a near-UINT32_MAX wire length
+                 * cannot overflow when combined with the 4-byte header.
+                 * vec->len >= 4 was checked above.
                  */
                 if (name_len > vec->len - 4) {
                         /* name can be truncated if client supplied small buffer */
-                        name_len = (uint32_t)(vec->len - 4);
+                        name_len = vec->len - 4;
                 }
                 if (name_len > 0) {
                         name = smb2_utf16_to_utf8((uint16_t *)(void *)&vec->buf[4], name_len / 2);

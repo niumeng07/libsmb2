@@ -3054,7 +3054,8 @@ ndr_conformance_coder(struct dcerpc_context *ctx, struct dcerpc_pdu *pdu,
                                 return -1;
                         }
                 } else {
-                        if (dcerpc_set_uint32(ctx, pdu, iov, offset, val)) {
+                        if (val > UINT32_MAX ||
+                            dcerpc_set_uint32(ctx, pdu, iov, offset, (uint32_t)val)) {
                                 return -1;
                         }
                 }
@@ -3299,10 +3300,14 @@ int ndr_union_coder(char *name, struct dcerpc_context *ctx,
         if (ndr_uint3264_coder("", ctx, pdu, iov, offset, &p)) {
                 return -1;
         }
-        *switch_is = p;
+        if (p > UINT32_MAX) {
+                return -1;
+        }
+        *switch_is = (uint32_t)p;
 
         /* Data */
-        dcerpc_set_switch_is(pdu, p);
+        /* The signed switch API carries the same 32-bit discriminator bits. */
+        dcerpc_set_switch_is(pdu, (int32_t)*switch_is);
         if (coder(name, ctx, pdu, iov, offset, ptr)) {
                 return -1;
         }

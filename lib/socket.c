@@ -337,6 +337,30 @@ smb2_write_to_socket(struct smb2_context *smb2)
 typedef ssize_t (*read_func)(struct smb2_context *smb2,
                              const struct iovec *iov, int iovcnt);
 
+/* Validate before subtracting unsigned sizes or narrowing to the parser's int. */
+static int smb2_remaining_length(size_t total, size_t consumed)
+{
+        if (consumed > total || total - consumed > SMB2_MAX_PDU_SIZE) {
+                return -1;
+        }
+        return (int)(total - consumed);
+}
+
+static int smb2_padding_length(struct smb2_context *smb2)
+{
+        if (smb2->hdr.next_command) {
+                if (smb2->hdr.next_command < SMB2_HEADER_SIZE ||
+                    smb2->in.num_done < smb2->payload_offset) {
+                        return -1;
+                }
+                return smb2_remaining_length(smb2->hdr.next_command - SMB2_HEADER_SIZE,
+                                smb2->in.num_done - smb2->payload_offset);
+        }
+        /* Decrypted payloads do not include the SPL. */
+        return smb2_remaining_length((size_t)smb2->spl + (smb2->enc ? 0 : SMB2_SPL_SIZE),
+                        smb2->in.num_done);
+}
+
 static int smb2_read_data(struct smb2_context *smb2, read_func func,
                           int has_xfrmhdr)
 {
@@ -542,14 +566,12 @@ read_more_data:
                          * request sometime later.
                          */
 
-                        len = smb2->spl - smb2->in.num_done;
                         /* If we don't have a transform header we are reading
                          * straight from the socket, and not a buffer,
                          * so we need to take the SPL size into account.
                          */
-                        if (!has_xfrmhdr) {
-                                len += SMB2_SPL_SIZE;
-                        }
+                        len = smb2_remaining_length((size_t)smb2->spl +
+                                        (has_xfrmhdr ? 0 : SMB2_SPL_SIZE), smb2->in.num_done);
                         /*
                          * A header-only interim response (an SPL of exactly
                          * SMB2_HEADER_SIZE, which passes the SPL check
@@ -631,10 +653,8 @@ read_more_data:
                                 }
                                 pdu = smb2->pdu = smb2_find_pdu(smb2, smb2->hdr.message_id);
                                 if (pdu == NULL) {
-                                        len = smb2->spl - smb2->in.num_done;
-                                        if (!has_xfrmhdr) {
-                                                len += SMB2_SPL_SIZE;
-                                        }
+                                        len = smb2_remaining_length((size_t)smb2->spl +
+                                                        (has_xfrmhdr ? 0 : SMB2_SPL_SIZE), smb2->in.num_done);
                                         if (len < 0 || len > SMB2_MAX_PDU_SIZE) {
                                                 smb2_set_error(smb2, "no matching PDU found");
                                                 return -1;
@@ -760,19 +780,7 @@ read_more_data:
                 }
 
                 /* Check for padding */
-                if (smb2->hdr.next_command) {
-                        len = smb2->hdr.next_command - (SMB2_HEADER_SIZE +
-                                  smb2->in.num_done - smb2->payload_offset);
-                } else {
-                        len = smb2->spl + SMB2_SPL_SIZE - smb2->in.num_done;
-                        /*
-                         * We never read the SPL when handling decrypted
-                         * payloads.
-                         */
-                        if (smb2->enc) {
-                                len -= SMB2_SPL_SIZE;
-                        }
-                }
+                len = smb2_padding_length(smb2);
                 if (len < 0) {
                         smb2_set_error(smb2, "Negative number of PAD bytes "
                                        "encountered during PDU decode of"
@@ -810,19 +818,7 @@ read_more_data:
                 }
 
                 /* Check for padding */
-                if (smb2->hdr.next_command) {
-                        len = smb2->hdr.next_command - (SMB2_HEADER_SIZE +
-                                  smb2->in.num_done - smb2->payload_offset);
-                } else {
-                        len = smb2->spl + SMB2_SPL_SIZE - smb2->in.num_done;
-                        /*
-                         * We never read the SPL when handling decrypted
-                         * payloads.
-                         */
-                        if (smb2->enc) {
-                                len -= SMB2_SPL_SIZE;
-                        }
-                }
+                len = smb2_padding_length(smb2);
                 if (len < 0) {
                         smb2_set_error(smb2, "Negative number of PAD bytes "
                                        "encountered during PDU decode of"

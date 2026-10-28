@@ -559,7 +559,7 @@ smb2_process_query_directory_request_variable(struct smb2_context *smb2,
         struct smb2_query_directory_request *req = pdu->payload;
         struct smb2_iovec *iov = &smb2->in.iov[smb2->in.niov - 1];
         void *ptr;
-        int name_byte_len;
+        size_t name_byte_len;
 
         if (req->file_name_length > 0) {
                 req->name = smb2_utf16_to_utf8((uint16_t*)(void *)&iov->buf[IOVREQ_OFFSET_DIRECTORY], req->file_name_length / 2);

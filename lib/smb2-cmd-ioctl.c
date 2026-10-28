@@ -549,8 +549,11 @@ smb2_process_ioctl_request_variable(struct smb2_context *smb2,
         default:
                 if (smb2->passthrough) {
                         /* dont know how to handle this, let user decode it */
+                        if (vec.len > UINT32_MAX) {
+                                return -EINVAL;
+                        }
                         ptr = vec.buf;
-                        req->input_count = vec.len;
+                        req->input_count = (uint32_t)vec.len;
                 }
                 else {
                         smb2_set_error(smb2,

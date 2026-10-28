@@ -56,6 +56,7 @@
 #endif
 
 #include <ctype.h>
+#include <limits.h>
 #include "portable-endian.h"
 #include <stdio.h>
 
@@ -321,7 +322,7 @@ ntlm_decode_challenge_message(struct smb2_context *smb2, struct auth_data *auth_
                         unsigned char *buf, size_t len)
 {
         if (buf && len > 0) {
-                int alloc_len;
+                size_t alloc_len;
                 uint32_t inoff;
                 uint16_t inlen;
                 uint32_t outoff;
@@ -333,7 +334,8 @@ ntlm_decode_challenge_message(struct smb2_context *smb2, struct auth_data *auth_
                 struct smb2_utf16 *utf16_spn = NULL;
                 const uint32_t challenge_header_len = 56;
 
-                if (len < challenge_header_len) {
+                if (len < challenge_header_len || len > SIZE_MAX - 400 ||
+                    strlen(smb2->server) > INT_MAX - 32) {
                         return -1;
                 }
 
@@ -896,8 +898,8 @@ encode_ntlm_challenge(struct smb2_context *smb2, struct auth_data *auth_data)
         uint32_t u32;
         uint64_t u64;
         uint8_t anonymous = 0;
-        int target_info_pos;
-        int namelen;
+        size_t target_info_pos;
+        size_t namelen;
         char *upper = NULL;
 
         /* Generate CHALLENGE_MESSAGE  */
@@ -957,7 +959,7 @@ encode_ntlm_challenge(struct smb2_context *smb2, struct auth_data *auth_data)
 
         /* target name  */
         if (auth_data->workstation) {
-             int i;
+                size_t i;
                 namelen = strlen(auth_data->workstation);
                 upper = malloc(namelen + 1);
                 if (!upper) {
@@ -1023,7 +1025,11 @@ encode_ntlm_challenge(struct smb2_context *smb2, struct auth_data *auth_data)
         encoder(&u32, 4, auth_data);
 
         /* save the target info in auth-data for later */
-        auth_data->target_info_len = auth_data->len - target_info_pos;
+        if (auth_data->len < target_info_pos ||
+            auth_data->len - target_info_pos > UINT16_MAX) {
+                goto finished;
+        }
+        auth_data->target_info_len = (int)(auth_data->len - target_info_pos);
         free(auth_data->target_info);
         auth_data->target_info = malloc(auth_data->target_info_len);
         if (auth_data->target_info == NULL) {
@@ -1080,8 +1086,12 @@ ntlmssp_generate_blob(struct smb2_server *server, struct smb2_context *smb2, tim
                 encode_ntlm_negotiate_message(smb2, auth_data);
 
                 if (auth_data->spnego_wrap) {
+                        if (auth_data->len > UINT16_MAX) {
+                                smb2_set_error(smb2, "NTLMSSP negotiate message too large");
+                                return -1;
+                        }
                         spnego_len = smb2_spnego_wrap_gssapi(smb2, auth_data->buf,
-                                       auth_data->len, (void*)&spnego_buf);
+                                       (int)auth_data->len, (void*)&spnego_buf);
                         if (spnego_len < 0) {
                                 smb2_set_error(smb2, "can not wrap negotiate");
                                 return -1;
@@ -1114,9 +1124,13 @@ ntlmssp_generate_blob(struct smb2_server *server, struct smb2_context *smb2, tim
                                         return -1;
                                 }
                                 if (auth_data->spnego_wrap) {
+                                        if (auth_data->len > UINT16_MAX) {
+                                                smb2_set_error(smb2, "NTLMSSP challenge message too large");
+                                                return -1;
+                                        }
                                         spnego_len = smb2_spnego_wrap_ntlmssp_challenge(smb2,
                                                         auth_data->buf,
-                                                         auth_data->len, (void*)&spnego_buf);
+                                                         (int)auth_data->len, (void*)&spnego_buf);
                                         if (spnego_len < 0) {
                                                 smb2_set_error(smb2, "can not wrap challenge");
                                                 return -1;
@@ -1168,8 +1182,12 @@ ntlmssp_generate_blob(struct smb2_server *server, struct smb2_context *smb2, tim
                                         return -1;
                                 }
                                 if (auth_data->spnego_wrap) {
+                                        if (auth_data->len > UINT16_MAX) {
+                                                smb2_set_error(smb2, "NTLMSSP authentication message too large");
+                                                return -1;
+                                        }
                                         spnego_len = smb2_spnego_wrap_ntlmssp_auth(smb2,
-                                                                auth_data->buf, auth_data->len,
+                                                                auth_data->buf, (int)auth_data->len,
                                                                 (void*)&spnego_buf);
                                         if (spnego_len < 0) {
                                                 smb2_set_error(smb2, "can not wrap auth result");
@@ -1187,6 +1205,10 @@ ntlmssp_generate_blob(struct smb2_server *server, struct smb2_context *smb2, tim
                 }
         }
 
+        if (auth_data->len > UINT16_MAX) {
+                smb2_set_error(smb2, "NTLMSSP security buffer too large");
+                return -1;
+        }
         *output_buf = auth_data->buf;
         *output_len = (uint16_t)auth_data->len;
 
@@ -1354,7 +1376,8 @@ ntlmssp_authenticate_blob(struct smb2_server *server, struct smb2_context *smb2,
                 return -1;
         }
         temp = auth_data->buf;
-        temp_len = auth_data->len;
+        /* field_len is a 16-bit wire length; this buffer is 8 + field_len - 16. */
+        temp_len = (uint32_t)auth_data->len;
 
         smb2_hmac_md5(temp, temp_len, ResponseKeyNT, 16, NTProofStr);
         memcpy(auth_data->buf, NTProofStr, 16);

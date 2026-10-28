@@ -637,7 +637,7 @@ int asn1ber_oid_from_ber(struct asn1ber_context *actx, struct asn1ber_oid_value 
 int asn1ber_bytes_from_ber(struct asn1ber_context *actx, uint8_t *val, uint32_t maxlen, uint32_t *lenout)
 {
     int result;
-    size_t i;
+    uint32_t i;
     uint32_t vallen;
     uint8_t b = 0;
 
